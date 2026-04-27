@@ -1,4 +1,8 @@
-export function formatFileSize(bytes: number): string {
+export function formatFileSize(bytes?: number | null): string {
+  if (bytes === undefined || bytes === null || !Number.isFinite(bytes)) {
+    return 'Sin detectar';
+  }
+
   if (bytes === 0) {
     return '0 B';
   }

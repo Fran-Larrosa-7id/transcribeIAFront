@@ -30,6 +30,16 @@ export interface TranscriptionJob {
   errorMessage?: string | null;
 }
 
+export interface TranscriptionJobStatus {
+  id: string;
+  status: TranscriptionStatus;
+  progress: number;
+  finishedAt?: string | null;
+  errorMessage?: string | null;
+  transcriptText?: string | null;
+  summary?: string | null;
+}
+
 export interface CreateTranscriptionPayload {
   title: string;
   language: TranscriptionLanguage;

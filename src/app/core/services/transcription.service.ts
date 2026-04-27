@@ -6,6 +6,7 @@ import { environment } from '../../../environments/environment';
 import {
   CreateTranscriptionPayload,
   CreateTranscriptionUploadEvent,
+  TranscriptionJobStatus,
   TranscriptDownloadFormat,
   TranscriptionJob,
 } from '../models/transcription.models';
@@ -49,8 +50,8 @@ export class TranscriptionService {
     return this.http.get<TranscriptionJob>(`${this.apiUrl}/transcriptions/${encodeURIComponent(id)}`);
   }
 
-  getTranscriptionStatus(id: string): Observable<TranscriptionJob> {
-    return this.http.get<TranscriptionJob>(`${this.apiUrl}/transcriptions/${encodeURIComponent(id)}/status`);
+  getTranscriptionStatus(id: string): Observable<TranscriptionJobStatus> {
+    return this.http.get<TranscriptionJobStatus>(`${this.apiUrl}/transcriptions/${encodeURIComponent(id)}/status`);
   }
 
   /**

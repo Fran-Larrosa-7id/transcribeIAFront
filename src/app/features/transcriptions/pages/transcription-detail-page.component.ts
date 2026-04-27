@@ -3,7 +3,11 @@ import { Component, DestroyRef, inject, PLATFORM_ID, signal } from '@angular/cor
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { ActivatedRoute, RouterLink } from '@angular/router';
 import { Subscription, switchMap, takeWhile, timer } from 'rxjs';
-import { TranscriptDownloadFormat, TranscriptionJob } from '../../../core/models/transcription.models';
+import {
+  TranscriptDownloadFormat,
+  TranscriptionJob,
+  TranscriptionJobStatus,
+} from '../../../core/models/transcription.models';
 import { TranscriptionService } from '../../../core/services/transcription.service';
 import { formatDate, formatDuration, formatFileSize } from '../../../core/utils/formatters';
 import { EmptyStateComponent } from '../../../shared/components/empty-state/empty-state.component';
@@ -62,7 +66,7 @@ import { TranscriptionStepperComponent } from '../../../shared/components/transc
               </div>
               <div class="flex justify-between gap-4 border-b border-slate-100 pb-3">
                 <dt class="text-slate-500">Modelo</dt>
-                <dd class="text-right font-medium text-slate-800">{{ currentJob.model === 'economy' ? 'Económico' : 'Alta precisión' }}</dd>
+                <dd class="text-right font-medium text-slate-800">{{ modelLabel(currentJob.model) }}</dd>
               </div>
               <div class="flex justify-between gap-4">
                 <dt class="text-slate-500">Creada</dt>
@@ -260,7 +264,7 @@ export class TranscriptionDetailPageComponent {
       .pipe(takeUntilDestroyed(this.destroyRef))
       .subscribe({
         next: (job) => {
-          this.job.set(job);
+          this.setJob(job);
           this.isRetrying.set(false);
           this.startPolling(job);
         },
@@ -271,7 +275,7 @@ export class TranscriptionDetailPageComponent {
       });
   }
 
-  protected languageLabel(language: string): string {
+  protected languageLabel(language: string | null | undefined): string {
     const labels: Record<string, string> = {
       auto: 'Automático',
       es: 'Español',
@@ -279,7 +283,16 @@ export class TranscriptionDetailPageComponent {
       pt: 'Portugués',
     };
 
-    return labels[language] ?? language;
+    return language ? (labels[language] ?? language) : 'Sin detectar';
+  }
+
+  protected modelLabel(model: string | null | undefined): string {
+    const labels: Record<string, string> = {
+      economy: 'Económico',
+      high_accuracy: 'Alta precisión',
+    };
+
+    return model ? (labels[model] ?? model) : 'Sin detectar';
   }
 
   protected readonly formatDate = formatDate;
@@ -319,9 +332,9 @@ export class TranscriptionDetailPageComponent {
       .pipe(takeUntilDestroyed(this.destroyRef))
       .subscribe({
         next: (job) => {
-          this.job.set(job);
+          this.setJob(job);
           this.isLoading.set(false);
-          this.startPolling(job);
+          this.startPolling(this.job() ?? job);
         },
         error: (error: unknown) => {
           this.errorMessage.set(this.transcriptionService.getFriendlyErrorMessage(error));
@@ -344,8 +357,12 @@ export class TranscriptionDetailPageComponent {
         takeUntilDestroyed(this.destroyRef),
       )
       .subscribe({
-        next: (updatedJob) => {
-          this.job.set(updatedJob);
+        next: (updatedStatus) => {
+          const mergedJob = this.mergeJobStatus(updatedStatus);
+
+          if (mergedJob) {
+            this.setJob(mergedJob);
+          }
         },
         error: (error: unknown) => {
           this.errorMessage.set(this.transcriptionService.getFriendlyErrorMessage(error));
@@ -360,6 +377,62 @@ export class TranscriptionDetailPageComponent {
   private stopPolling(): void {
     this.pollingSubscription?.unsubscribe();
     this.pollingSubscription = undefined;
+  }
+
+  private mergeJobStatus(status: TranscriptionJobStatus): TranscriptionJob | undefined {
+    const currentJob = this.job();
+
+    if (!currentJob) {
+      return undefined;
+    }
+
+    return {
+      ...currentJob,
+      ...status,
+    };
+  }
+
+  private setJob(job: TranscriptionJob): void {
+    this.job.set(job);
+
+    if (this.hasMissingDisplayData(job)) {
+      this.hydrateJobFromList(job);
+    }
+  }
+
+  private hasMissingDisplayData(job: TranscriptionJob): boolean {
+    return (
+      !job.originalFilename ||
+      !Number.isFinite(job.fileSize) ||
+      !job.createdAt ||
+      !job.language ||
+      !job.model
+    );
+  }
+
+  private hydrateJobFromList(partialJob: TranscriptionJob): void {
+    this.transcriptionService
+      .getTranscriptions()
+      .pipe(takeUntilDestroyed(this.destroyRef))
+      .subscribe({
+        next: (jobs) => {
+          const fullJob = jobs.find((job) => job.id === partialJob.id);
+
+          if (!fullJob) {
+            return;
+          }
+
+          this.job.set({
+            ...fullJob,
+            status: partialJob.status,
+            progress: partialJob.progress,
+            finishedAt: partialJob.finishedAt ?? fullJob.finishedAt,
+            errorMessage: partialJob.errorMessage ?? fullJob.errorMessage,
+            transcriptText: partialJob.transcriptText ?? fullJob.transcriptText,
+            summary: partialJob.summary ?? fullJob.summary,
+          });
+        },
+      });
   }
 
   private downloadFilename(): string {

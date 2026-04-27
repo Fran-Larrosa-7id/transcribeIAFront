@@ -39,6 +39,10 @@ export interface CreateTranscriptionPayload {
   file: File;
 }
 
+export type CreateTranscriptionUploadEvent =
+  | { type: 'uploading'; progress: number }
+  | { type: 'created'; job: TranscriptionJob };
+
 export interface FileUploadValue {
   file: File;
   durationSeconds?: number;

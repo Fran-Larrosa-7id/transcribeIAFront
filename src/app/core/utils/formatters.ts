@@ -27,9 +27,19 @@ export function formatDuration(totalSeconds?: number | null): string {
   return `${minutes} min ${seconds.toString().padStart(2, '0')} s`;
 }
 
-export function formatDate(value: string): string {
+export function formatDate(value?: string | null): string {
+  if (!value) {
+    return 'Sin fecha';
+  }
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return 'Sin fecha';
+  }
+
   return new Intl.DateTimeFormat('es-AR', {
     dateStyle: 'medium',
     timeStyle: 'short',
-  }).format(new Date(value));
+  }).format(date);
 }

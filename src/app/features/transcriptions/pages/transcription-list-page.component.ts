@@ -1,8 +1,7 @@
 import { Component, computed, DestroyRef, inject, signal } from '@angular/core';
-import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
-import { toSignal } from '@angular/core/rxjs-interop';
+import { takeUntilDestroyed, toSignal } from '@angular/core/rxjs-interop';
 import { FormControl, ReactiveFormsModule } from '@angular/forms';
-import { combineLatest, map, startWith } from 'rxjs';
+import { combineLatest, map, startWith, Subscription, switchMap, takeWhile, tap, timer } from 'rxjs';
 import { TranscriptionJob, TranscriptionStatus } from '../../../core/models/transcription.models';
 import { TranscriptionService } from '../../../core/services/transcription.service';
 import { EmptyStateComponent } from '../../../shared/components/empty-state/empty-state.component';
@@ -11,6 +10,18 @@ import { PageHeaderComponent } from '../../../shared/components/page-header/page
 import { TranscriptionCardComponent } from '../../../shared/components/transcription-card/transcription-card.component';
 
 type StatusFilter = TranscriptionStatus | 'all';
+
+const ACTIVE_STATUSES: readonly TranscriptionStatus[] = [
+  'pending',
+  'uploading',
+  'processing_audio',
+  'transcribing',
+  'merging',
+];
+
+function hasActiveJobs(jobs: TranscriptionJob[]): boolean {
+  return jobs.some((job) => ACTIVE_STATUSES.includes(job.status));
+}
 
 @Component({
   selector: 'app-transcription-list-page',
@@ -26,12 +37,12 @@ type StatusFilter = TranscriptionStatus | 'all';
 
     <section class="mb-6 grid gap-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm md:grid-cols-[1fr_220px]">
       <label class="block">
-        <span class="text-sm font-semibold text-slate-800">Buscar por titulo</span>
+        <span class="text-sm font-semibold text-slate-800">Buscar por título</span>
         <input
           type="search"
           [formControl]="searchControl"
           class="mt-2 w-full rounded-lg border border-slate-300 px-3 py-2.5 text-slate-950 shadow-sm"
-          placeholder="Ej: reunion mensual"
+          placeholder="Ej: reunión mensual"
         />
       </label>
       <label class="block">
@@ -78,6 +89,7 @@ type StatusFilter = TranscriptionStatus | 'all';
 export class TranscriptionListPageComponent {
   private readonly transcriptionService = inject(TranscriptionService);
   private readonly destroyRef = inject(DestroyRef);
+  private pollingSubscription?: Subscription;
 
   protected readonly searchControl = new FormControl('', { nonNullable: true });
   protected readonly statusControl = new FormControl<StatusFilter>('all', { nonNullable: true });
@@ -118,21 +130,35 @@ export class TranscriptionListPageComponent {
   }
 
   protected loadTranscriptions(): void {
+    this.stopPolling();
     this.isLoading.set(true);
     this.errorMessage.set('');
 
-    this.transcriptionService
-      .getTranscriptions()
-      .pipe(takeUntilDestroyed(this.destroyRef))
-      .subscribe({
-        next: (jobs) => {
+    this.pollingSubscription = timer(0, 3000)
+      .pipe(
+        switchMap(() => this.transcriptionService.getTranscriptions()),
+        tap((jobs) => {
           this.jobs.set(jobs);
           this.isLoading.set(false);
-        },
+          this.errorMessage.set('');
+        }),
+        takeWhile((jobs) => hasActiveJobs(jobs), true),
+        takeUntilDestroyed(this.destroyRef),
+      )
+      .subscribe({
         error: (error: unknown) => {
           this.errorMessage.set(this.transcriptionService.getFriendlyErrorMessage(error));
           this.isLoading.set(false);
+          this.stopPolling();
+        },
+        complete: () => {
+          this.stopPolling();
         },
       });
+  }
+
+  private stopPolling(): void {
+    this.pollingSubscription?.unsubscribe();
+    this.pollingSubscription = undefined;
   }
 }

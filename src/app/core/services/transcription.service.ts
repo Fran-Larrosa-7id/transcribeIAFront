@@ -1,10 +1,11 @@
 import { isPlatformBrowser } from '@angular/common';
-import { HttpClient, HttpErrorResponse } from '@angular/common/http';
+import { HttpClient, HttpErrorResponse, HttpEventType } from '@angular/common/http';
 import { inject, Injectable, PLATFORM_ID } from '@angular/core';
-import { Observable } from 'rxjs';
+import { filter, map, Observable } from 'rxjs';
 import { environment } from '../../../environments/environment';
 import {
   CreateTranscriptionPayload,
+  CreateTranscriptionUploadEvent,
   TranscriptDownloadFormat,
   TranscriptionJob,
 } from '../models/transcription.models';
@@ -16,15 +17,28 @@ export class TranscriptionService {
   private readonly apiUrl = environment.apiUrl;
 
   createTranscription(payload: CreateTranscriptionPayload): Observable<TranscriptionJob> {
-    const formData = new FormData();
-    formData.append('title', payload.title);
-    formData.append('language', payload.language);
-    formData.append('model', payload.model);
-    formData.append('fixPunctuation', String(payload.fixPunctuation));
-    formData.append('generateSummary', String(payload.generateSummary));
-    formData.append('file', payload.file);
+    return this.http.post<TranscriptionJob>(`${this.apiUrl}/transcriptions`, this.buildCreateFormData(payload));
+  }
 
-    return this.http.post<TranscriptionJob>(`${this.apiUrl}/transcriptions`, formData);
+  createTranscriptionWithUploadProgress(
+    payload: CreateTranscriptionPayload,
+  ): Observable<CreateTranscriptionUploadEvent> {
+    return this.http
+      .post<TranscriptionJob>(`${this.apiUrl}/transcriptions`, this.buildCreateFormData(payload), {
+        observe: 'events',
+        reportProgress: true,
+      })
+      .pipe(
+        filter((event) => event.type === HttpEventType.UploadProgress || event.type === HttpEventType.Response),
+        map((event): CreateTranscriptionUploadEvent => {
+          if (event.type === HttpEventType.UploadProgress) {
+            const progress = event.total ? Math.round((event.loaded / event.total) * 100) : 0;
+            return { type: 'uploading', progress };
+          }
+
+          return { type: 'created', job: event.body as TranscriptionJob };
+        }),
+      );
   }
 
   getTranscriptions(): Observable<TranscriptionJob[]> {
@@ -35,6 +49,14 @@ export class TranscriptionService {
     return this.http.get<TranscriptionJob>(`${this.apiUrl}/transcriptions/${encodeURIComponent(id)}`);
   }
 
+  getTranscriptionStatus(id: string): Observable<TranscriptionJob> {
+    return this.http.get<TranscriptionJob>(`${this.apiUrl}/transcriptions/${encodeURIComponent(id)}/status`);
+  }
+
+  /**
+   * Development-only endpoint kept for local backend experiments.
+   * The BullMQ flow polls getTranscriptionStatus/getTranscriptionById instead.
+   */
   simulateProgress(id: string): Observable<TranscriptionJob> {
     return this.http.patch<TranscriptionJob>(
       `${this.apiUrl}/transcriptions/${encodeURIComponent(id)}/simulate-progress`,
@@ -64,11 +86,11 @@ export class TranscriptionService {
 
   getFriendlyErrorMessage(error: unknown): string {
     if (!(error instanceof HttpErrorResponse)) {
-      return 'Ocurrio un error inesperado. Proba nuevamente en unos minutos.';
+      return 'Ocurrió un error inesperado. Probá nuevamente en unos minutos.';
     }
 
     if (error.status === 0) {
-      return 'No pudimos conectar con el backend. Verifica que NestJS este corriendo en localhost:3000.';
+      return 'No pudimos conectar con el backend. Verificá que NestJS esté corriendo en localhost:3000.';
     }
 
     if (error.status === 404) {
@@ -88,5 +110,17 @@ export class TranscriptionService {
     }
 
     return 'No pudimos completar la acción. Revisá los datos e intentá nuevamente.';
+  }
+
+  private buildCreateFormData(payload: CreateTranscriptionPayload): FormData {
+    const formData = new FormData();
+    formData.append('title', payload.title);
+    formData.append('language', payload.language);
+    formData.append('model', payload.model);
+    formData.append('fixPunctuation', String(payload.fixPunctuation));
+    formData.append('generateSummary', String(payload.generateSummary));
+    formData.append('file', payload.file);
+
+    return formData;
   }
 }

@@ -1,8 +1,8 @@
 import { DOCUMENT, isPlatformBrowser } from '@angular/common';
 import { Component, DestroyRef, inject, PLATFORM_ID, signal } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
-import { ActivatedRoute } from '@angular/router';
-import { interval, Subscription, switchMap } from 'rxjs';
+import { ActivatedRoute, RouterLink } from '@angular/router';
+import { Subscription, switchMap, takeWhile, timer } from 'rxjs';
 import { TranscriptDownloadFormat, TranscriptionJob } from '../../../core/models/transcription.models';
 import { TranscriptionService } from '../../../core/services/transcription.service';
 import { formatDate, formatDuration, formatFileSize } from '../../../core/utils/formatters';
@@ -16,6 +16,7 @@ import { TranscriptionStepperComponent } from '../../../shared/components/transc
 @Component({
   selector: 'app-transcription-detail-page',
   imports: [
+    RouterLink,
     PageHeaderComponent,
     ProgressBarComponent,
     TranscriptionStatusBadgeComponent,
@@ -77,12 +78,12 @@ import { TranscriptionStepperComponent } from '../../../shared/components/transc
             </div>
             <app-progress-bar [progress]="currentJob.progress" label="Progreso general" />
             <p class="mt-4 text-sm leading-6 text-slate-600">
-              Podés cerrar esta pantalla y volver al historial cuando esté listo. El procesamiento se encuentra en modo de prueba; en la próxima etapa se conectará el motor real de transcripción con IA.
+              El progreso se actualiza automáticamente. Podés cerrar esta pantalla y volver más tarde desde el historial.
             </p>
           </section>
         </aside>
 
-      <section class="space-y-6">
+        <section class="space-y-6">
           @if (actionMessage()) {
             <p class="rounded-lg bg-indigo-50 px-4 py-3 text-sm font-medium text-indigo-700" role="status">{{ actionMessage() }}</p>
           }
@@ -97,7 +98,7 @@ import { TranscriptionStepperComponent } from '../../../shared/components/transc
                   <div class="max-w-2xl">
                     <h2 class="text-lg font-semibold text-slate-950">Transcripción final</h2>
                     <p class="mt-2 text-sm leading-6 text-slate-600">
-                      Esta es una transcripción de prueba generada automáticamente para validar el flujo de carga, procesamiento y descarga del archivo.
+                      El trabajo finalizó correctamente. Ya podés revisar, copiar o descargar el resultado.
                     </p>
                   </div>
                   <button
@@ -123,16 +124,16 @@ import { TranscriptionStepperComponent } from '../../../shared/components/transc
                 <div class="mt-6">
                   <h3 class="text-sm font-semibold text-slate-950">Descargas</h3>
                   <div class="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
-                  @for (format of downloadFormats; track format) {
-                    <button
-                      type="button"
-                      class="rounded-lg bg-slate-950 px-4 py-2.5 text-sm font-semibold uppercase text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-300"
-                      [disabled]="isDownloading()"
-                      (click)="download(currentJob.id, format)"
-                    >
-                      {{ format }}
-                    </button>
-                  }
+                    @for (format of downloadFormats; track format) {
+                      <button
+                        type="button"
+                        class="rounded-lg bg-slate-950 px-4 py-2.5 text-sm font-semibold uppercase text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                        [disabled]="isDownloading()"
+                        (click)="download(currentJob.id, format)"
+                      >
+                        {{ format }}
+                      </button>
+                    }
                   </div>
                 </div>
               </section>
@@ -143,7 +144,7 @@ import { TranscriptionStepperComponent } from '../../../shared/components/transc
                 <p class="mt-2 text-sm leading-6 text-rose-800">{{ currentJob.errorMessage }}</p>
                 <button
                   type="button"
-                  class="mt-5 rounded-lg bg-rose-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-rose-700"
+                  class="mt-5 rounded-lg bg-rose-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-rose-700 disabled:cursor-not-allowed disabled:bg-rose-300"
                   (click)="retry(currentJob.id)"
                   [disabled]="isRetrying()"
                 >
@@ -155,7 +156,10 @@ import { TranscriptionStepperComponent } from '../../../shared/components/transc
               <section class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
                 <h2 class="text-lg font-semibold text-slate-950">Procesamiento en curso</h2>
                 <p class="mt-2 text-sm leading-6 text-slate-600">
-                  El archivo fue recibido correctamente. El procesamiento se encuentra en modo de prueba mientras se prepara la conexión con el motor real de transcripción con IA.
+                  El archivo ya fue recibido. Estamos procesando la transcripción en segundo plano.
+                </p>
+                <p class="mt-2 text-sm leading-6 text-slate-600">
+                  Podés cerrar esta pantalla y volver más tarde desde el historial.
                 </p>
                 <div class="mt-6">
                   <app-transcription-stepper [status]="currentJob.status" [progress]="currentJob.progress" />
@@ -170,7 +174,7 @@ import { TranscriptionStepperComponent } from '../../../shared/components/transc
         <h2 class="font-semibold text-rose-950">No pudimos cargar la transcripción</h2>
         <p class="mt-2 text-sm leading-6 text-rose-800">{{ errorMessage() }}</p>
         <a
-          href="/transcriptions"
+          routerLink="/transcriptions"
           class="mt-4 inline-flex rounded-lg bg-rose-600 px-4 py-2 text-sm font-semibold text-white hover:bg-rose-700"
         >
           Volver al historial
@@ -231,16 +235,19 @@ export class TranscriptionDetailPageComponent {
     }
 
     this.isDownloading.set(true);
-    this.transcriptionService.downloadTranscript(id, format).subscribe({
-      next: (blob) => {
-        this.saveBlob(blob, this.downloadFilename());
-        this.isDownloading.set(false);
-      },
-      error: (error: unknown) => {
-        this.errorMessage.set(this.transcriptionService.getFriendlyErrorMessage(error));
-        this.isDownloading.set(false);
-      },
-    });
+    this.transcriptionService
+      .downloadTranscript(id, format)
+      .pipe(takeUntilDestroyed(this.destroyRef))
+      .subscribe({
+        next: (blob) => {
+          this.saveBlob(blob, this.downloadFilename());
+          this.isDownloading.set(false);
+        },
+        error: (error: unknown) => {
+          this.errorMessage.set(this.transcriptionService.getFriendlyErrorMessage(error));
+          this.isDownloading.set(false);
+        },
+      });
   }
 
   protected retry(id: string): void {
@@ -248,17 +255,20 @@ export class TranscriptionDetailPageComponent {
     this.errorMessage.set('');
     this.actionMessage.set('');
 
-    this.transcriptionService.retryTranscription(id).subscribe({
-      next: (job) => {
-        this.job.set(job);
-        this.isRetrying.set(false);
-        this.startPolling(job);
-      },
-      error: (error: unknown) => {
-        this.errorMessage.set(this.transcriptionService.getFriendlyErrorMessage(error));
-        this.isRetrying.set(false);
-      },
-    });
+    this.transcriptionService
+      .retryTranscription(id)
+      .pipe(takeUntilDestroyed(this.destroyRef))
+      .subscribe({
+        next: (job) => {
+          this.job.set(job);
+          this.isRetrying.set(false);
+          this.startPolling(job);
+        },
+        error: (error: unknown) => {
+          this.errorMessage.set(this.transcriptionService.getFriendlyErrorMessage(error));
+          this.isRetrying.set(false);
+        },
+      });
   }
 
   protected languageLabel(language: string): string {
@@ -304,17 +314,20 @@ export class TranscriptionDetailPageComponent {
     this.actionMessage.set('');
     this.job.set(undefined);
 
-    this.transcriptionService.getTranscriptionById(id).subscribe({
-      next: (job) => {
-        this.job.set(job);
-        this.isLoading.set(false);
-        this.startPolling(job);
-      },
-      error: (error: unknown) => {
-        this.errorMessage.set(this.transcriptionService.getFriendlyErrorMessage(error));
-        this.isLoading.set(false);
-      },
-    });
+    this.transcriptionService
+      .getTranscriptionById(id)
+      .pipe(takeUntilDestroyed(this.destroyRef))
+      .subscribe({
+        next: (job) => {
+          this.job.set(job);
+          this.isLoading.set(false);
+          this.startPolling(job);
+        },
+        error: (error: unknown) => {
+          this.errorMessage.set(this.transcriptionService.getFriendlyErrorMessage(error));
+          this.isLoading.set(false);
+        },
+      });
   }
 
   private startPolling(job: TranscriptionJob): void {
@@ -324,21 +337,21 @@ export class TranscriptionDetailPageComponent {
       return;
     }
 
-    this.pollingSubscription = interval(3000)
+    this.pollingSubscription = timer(3000, 3000)
       .pipe(
-        switchMap(() => this.transcriptionService.simulateProgress(job.id)),
+        switchMap(() => this.transcriptionService.getTranscriptionStatus(job.id)),
+        takeWhile((updatedJob) => updatedJob.status !== 'completed' && updatedJob.status !== 'failed', true),
         takeUntilDestroyed(this.destroyRef),
       )
       .subscribe({
         next: (updatedJob) => {
           this.job.set(updatedJob);
-
-          if (updatedJob.status === 'completed' || updatedJob.status === 'failed') {
-            this.stopPolling();
-          }
         },
         error: (error: unknown) => {
           this.errorMessage.set(this.transcriptionService.getFriendlyErrorMessage(error));
+          this.stopPolling();
+        },
+        complete: () => {
           this.stopPolling();
         },
       });

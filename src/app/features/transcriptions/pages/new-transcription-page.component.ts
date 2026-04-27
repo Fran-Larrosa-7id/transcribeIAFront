@@ -1,4 +1,5 @@
-import { Component, computed, inject, signal } from '@angular/core';
+import { Component, computed, DestroyRef, inject, signal } from '@angular/core';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { NonNullableFormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
 import { Router } from '@angular/router';
 import {
@@ -9,16 +10,17 @@ import {
 } from '../../../core/models/transcription.models';
 import { TranscriptionService } from '../../../core/services/transcription.service';
 import { AudioUploadDropzoneComponent } from '../../../shared/components/audio-upload-dropzone/audio-upload-dropzone.component';
+import { ProgressBarComponent } from '../../../shared/components/progress-bar/progress-bar.component';
 import { PageHeaderComponent } from '../../../shared/components/page-header/page-header.component';
 
 @Component({
   selector: 'app-new-transcription-page',
-  imports: [ReactiveFormsModule, PageHeaderComponent, AudioUploadDropzoneComponent],
+  imports: [ReactiveFormsModule, PageHeaderComponent, AudioUploadDropzoneComponent, ProgressBarComponent],
   template: `
     <app-page-header
       eyebrow="Nuevo trabajo"
       title="Crear transcripción"
-      description="Seleccioná el archivo y la configuración. El procesamiento pesado se realizará en el backend."
+      description="Seleccioná el archivo y la configuración. El backend recibirá el audio y procesará la transcripción en segundo plano."
     />
 
     <form class="grid gap-6 lg:grid-cols-[1fr_0.75fr]" [formGroup]="form" (ngSubmit)="submit()">
@@ -34,7 +36,7 @@ import { PageHeaderComponent } from '../../../shared/components/page-header/page
               placeholder="Ej: Entrevista con cliente"
             />
             @if (titleInvalid()) {
-              <p class="mt-2 text-sm text-rose-600">El titulo es obligatorio.</p>
+              <p class="mt-2 text-sm text-rose-600">El título es obligatorio.</p>
             }
           </div>
 
@@ -62,7 +64,7 @@ import { PageHeaderComponent } from '../../../shared/components/page-header/page
             <label class="flex items-start gap-3 rounded-lg border border-slate-200 p-4">
               <input type="checkbox" formControlName="fixPunctuation" class="mt-1 h-4 w-4 rounded border-slate-300 text-indigo-600" />
               <span>
-                <span class="block text-sm font-semibold text-slate-800">Corregir puntuacion automaticamente</span>
+                <span class="block text-sm font-semibold text-slate-800">Corregir puntuación automáticamente</span>
                 <span class="mt-1 block text-sm text-slate-500">Mejora la legibilidad del texto final.</span>
               </span>
             </label>
@@ -81,7 +83,7 @@ import { PageHeaderComponent } from '../../../shared/components/page-header/page
       <aside class="space-y-6">
         <app-audio-upload-dropzone (fileSelected)="onFileSelected($event)" />
         @if (fileMissing()) {
-          <p class="rounded-lg bg-rose-50 px-4 py-3 text-sm font-medium text-rose-700">Selecciona un archivo de audio para continuar.</p>
+          <p class="rounded-lg bg-rose-50 px-4 py-3 text-sm font-medium text-rose-700">Seleccioná un archivo de audio para continuar.</p>
         }
         @if (errorMessage()) {
           <p class="rounded-lg bg-rose-50 px-4 py-3 text-sm font-medium text-rose-700" role="alert">{{ errorMessage() }}</p>
@@ -90,14 +92,24 @@ import { PageHeaderComponent } from '../../../shared/components/page-header/page
         <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
           <h2 class="font-semibold text-slate-950">Antes de crear</h2>
           <p class="mt-2 text-sm leading-6 text-slate-600">
-            Podés subir audios de 4 horas o más. La carga se enviará al backend y podrás consultar el historial mientras se procesa.
+            Podés subir audios de 4 horas o más. La subida prepara el trabajo; la transcripción continuará en segundo plano.
           </p>
+
+          @if (isSubmitting()) {
+            <div class="mt-5 rounded-xl border border-indigo-100 bg-indigo-50/70 p-4">
+              <app-progress-bar [progress]="uploadProgress()" [label]="uploadLabel()" />
+              <p class="mt-3 text-sm text-indigo-900">
+                Este progreso corresponde solo a la carga del archivo al backend.
+              </p>
+            </div>
+          }
+
           <button
             type="submit"
             class="mt-5 inline-flex w-full justify-center rounded-lg bg-indigo-600 px-4 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-300"
             [disabled]="isSubmitting()"
           >
-            {{ isSubmitting() ? 'Creando...' : 'Crear transcripción' }}
+            {{ isSubmitting() ? 'Subiendo archivo...' : 'Crear transcripción' }}
           </button>
         </div>
       </aside>
@@ -107,12 +119,17 @@ import { PageHeaderComponent } from '../../../shared/components/page-header/page
 export class NewTranscriptionPageComponent {
   private readonly fb = inject(NonNullableFormBuilder);
   private readonly router = inject(Router);
+  private readonly destroyRef = inject(DestroyRef);
   private readonly transcriptionService = inject(TranscriptionService);
 
   protected readonly selectedFile = signal<FileUploadValue | null>(null);
   protected readonly attemptedSubmit = signal(false);
   protected readonly isSubmitting = signal(false);
   protected readonly errorMessage = signal('');
+  protected readonly uploadProgress = signal(0);
+  protected readonly uploadLabel = computed(() =>
+    this.uploadProgress() >= 100 ? 'Archivo recibido' : 'Subiendo archivo...',
+  );
 
   protected readonly form = this.fb.group({
     title: ['', [Validators.required, Validators.maxLength(120)]],
@@ -136,6 +153,7 @@ export class NewTranscriptionPageComponent {
   protected submit(): void {
     this.attemptedSubmit.set(true);
     this.errorMessage.set('');
+    this.uploadProgress.set(0);
     this.form.markAllAsTouched();
 
     const upload = this.selectedFile();
@@ -149,14 +167,24 @@ export class NewTranscriptionPageComponent {
       file: upload.file,
     };
 
-    this.transcriptionService.createTranscription(payload).subscribe({
-      next: (job) => {
-        void this.router.navigate(['/transcriptions', job.id]);
-      },
-      error: (error: unknown) => {
-        this.errorMessage.set(this.transcriptionService.getFriendlyErrorMessage(error));
-        this.isSubmitting.set(false);
-      },
-    });
+    this.transcriptionService
+      .createTranscriptionWithUploadProgress(payload)
+      .pipe(takeUntilDestroyed(this.destroyRef))
+      .subscribe({
+        next: (event) => {
+          if (event.type === 'uploading') {
+            this.uploadProgress.set(event.progress);
+            return;
+          }
+
+          this.uploadProgress.set(100);
+          void this.router.navigate(['/transcriptions', event.job.id]);
+        },
+        error: (error: unknown) => {
+          this.errorMessage.set(this.transcriptionService.getFriendlyErrorMessage(error));
+          this.isSubmitting.set(false);
+          this.uploadProgress.set(0);
+        },
+      });
   }
 }
